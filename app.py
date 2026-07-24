@@ -9,9 +9,10 @@ load_dotenv()  # carrega .env local antes de importar módulos que leem env vars
 
 # O psycopg_pool reporta falha de conexão no logger dele e segue tentando em
 # background; sem configurar logging o gunicorn descarta essas mensagens e a
-# única coisa visível vira o PoolTimeout, que não diz a causa.
+# única coisa visível vira o PoolTimeout, que não diz a causa (foi exatamente
+# o que dificultou o debug da queda de 24/07/2026).
 logging.basicConfig(level=logging.INFO)
-logging.getLogger("psycopg.pool").setLevel(logging.DEBUG)
+logging.getLogger("psycopg.pool").setLevel(logging.WARNING)
 from flask import Flask, request, jsonify, send_from_directory
 import game_core as gc
 import auth, db
@@ -411,49 +412,6 @@ def _limpar_salas_vazias():
 @app.route("/")
 def index():
     return send_from_directory("static", "index.html")
-
-
-@app.route("/api/dbcheck")
-def dbcheck():
-    """
-    Diagnóstico TEMPORÁRIO. O psycopg_pool engole a exceção de conexão e só
-    expõe PoolTimeout, que não diz nada sobre a causa. Aqui testamos DNS, TCP
-    e Postgres em separado para isolar em que camada quebra.
-    Remover assim que a conexão do Render estiver resolvida.
-    """
-    import socket
-    import psycopg
-    from urllib.parse import urlparse
-
-    url = os.environ.get("SUPABASE_DB_URL", "")
-    p = urlparse(url)
-    host, porta = p.hostname, (p.port or 5432)
-    out = {"host": host, "porta": porta, "usuario": p.username}
-
-    try:
-        infos = socket.getaddrinfo(host, porta, 0, socket.SOCK_STREAM)
-        out["dns"] = sorted({i[4][0] for i in infos})
-    except Exception as e:
-        out["dns"] = f"{type(e).__name__}: {e}"
-
-    try:
-        t = time.time()
-        s = socket.create_connection((host, porta), timeout=8)
-        s.close()
-        out["tcp"] = "ok em %.2fs" % (time.time() - t)
-    except Exception as e:
-        out["tcp"] = f"{type(e).__name__}: {e}"
-
-    try:
-        t = time.time()
-        with psycopg.connect(url, connect_timeout=8) as c:
-            with c.cursor() as cur:
-                cur.execute("select 1")
-        out["postgres"] = "ok em %.2fs" % (time.time() - t)
-    except Exception as e:
-        out["postgres"] = f"{type(e).__name__}: {str(e)[:300]}"
-
-    return jsonify(out)
 
 
 @app.route("/api/health")
