@@ -4,9 +4,11 @@ de partidas). Conexão direta via psycopg — sem ORM, condizente com o
 resto do projeto.
 """
 import os
+import sys
 import json
 from datetime import date, timedelta
 from contextlib import contextmanager
+import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 import achievements as ach
@@ -40,13 +42,33 @@ _pool = ConnectionPool(
 
 @contextmanager
 def _conn():
+    """
+    Entrega uma conexão do pool; se o pool não conseguir entregar nenhuma,
+    abre uma conexão direta em vez de derrubar o request.
+
+    Motivo: em produção o pool entrou em estado de falha permanente e passou a
+    estourar PoolTimeout em toda requisição, mesmo com o banco saudável — uma
+    conexão crua abria em 0,15s no mesmo processo. Enquanto a causa não está
+    fechada, o fallback impede que isso vire indisponibilidade total. O pooler
+    do Supabase já é um pgbouncer, então abrir conexão avulsa é barato.
+    """
     try:
-        with _pool.connection() as conn:
-            yield conn
+        cm = _pool.connection()
+        conn = cm.__enter__()
     except Exception as e:
-        import sys
-        print(f"[DB ERROR] {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        print(f"[DB] pool indisponivel ({type(e).__name__}: {e}) -> conexao direta",
+              file=sys.stderr, flush=True)
+        with psycopg.connect(_DB_URL, row_factory=dict_row, connect_timeout=8) as conn:
+            yield conn
+        return
+
+    try:
+        yield conn
+    except BaseException:
+        cm.__exit__(*sys.exc_info())
         raise
+    else:
+        cm.__exit__(None, None, None)
 
 
 def criar_perfil(username, pin_hash):

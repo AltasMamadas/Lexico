@@ -4,7 +4,10 @@ services:
     runtime: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    # workers=1 é obrigatório: o estado das salas vive em memória (dict `salas`).
+    # threads=8 destrava a concorrência — no padrão (sync, 1 thread) o app
+    # atende uma requisição por vez e qualquer I/O lento congela todo mundo.
+    startCommand: gunicorn app:app --worker-class gthread --workers 1 --threads 8 --timeout 60
     envVars:
       - key: SECRET_KEY
         sync: false
