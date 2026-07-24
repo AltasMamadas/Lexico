@@ -6,6 +6,7 @@ resto do projeto.
 import os
 import sys
 import json
+import threading
 from datetime import date, timedelta
 from contextlib import contextmanager
 import psycopg
@@ -20,24 +21,44 @@ if not _DB_URL:
 if "sslmode" not in _DB_URL:
     _DB_URL += ("&" if "?" in _DB_URL else "?") + "sslmode=require"
 
-# Pool único reutilizado por todo o processo — evita o custo de TCP+TLS+auth
-# a cada query (caro no free tier do Supabase). Conexões abrem sob demanda.
+# O pool NÃO pode ser criado no import. O gunicorn faz fork depois de carregar
+# o módulo, e as threads de background do pool não sobrevivem ao fork: o worker
+# herdava um pool que nunca conseguia abrir conexão, estourava PoolTimeout em
+# toda requisição e caía no fallback — 8,4s fixos por chamada ao banco, medidos
+# em produção, enquanto uma conexão direta no mesmo processo abria em 0,15s.
 #
-# timeout=8: o padrão (30s) faz o request pendurar meio minuto quando o banco
-# está inalcançável, e o cliente fica preso em "Carregando...". Falhar rápido
-# deixa o erro visível em vez de travar a tela.
-# check: o pooler do Supabase derruba conexões ociosas; sem validar antes de
-# entregar, o pool devolve conexão morta depois de um período de inatividade.
-_pool = ConnectionPool(
-    _DB_URL,
-    min_size=1,
-    max_size=8,
-    timeout=8,
-    max_idle=120,
-    check=ConnectionPool.check_connection,
-    kwargs={"row_factory": dict_row, "connect_timeout": 8},
-    open=True,
-)
+# Criar sob demanda e amarrado ao PID garante que o pool pertence ao processo
+# que o usa, seja qual for a estratégia de fork do servidor.
+_pool = None
+_pool_pid = None
+_pool_lock = threading.Lock()
+
+# timeout=3: se ainda assim o pool falhar, o fallback entra rápido em vez de
+# cobrar 8s de cada request.
+_POOL_TIMEOUT = 3
+
+
+def _get_pool():
+    global _pool, _pool_pid
+    pid = os.getpid()
+    if _pool is not None and _pool_pid == pid:
+        return _pool
+    with _pool_lock:
+        if _pool is None or _pool_pid != pid:
+            _pool = ConnectionPool(
+                _DB_URL,
+                min_size=1,
+                max_size=8,
+                timeout=_POOL_TIMEOUT,
+                max_idle=120,
+                # o pooler do Supabase derruba conexão ociosa; sem validar antes
+                # de entregar, o pool devolve conexão morta após inatividade
+                check=ConnectionPool.check_connection,
+                kwargs={"row_factory": dict_row, "connect_timeout": 8},
+                open=True,
+            )
+            _pool_pid = pid
+    return _pool
 
 
 @contextmanager
@@ -46,14 +67,13 @@ def _conn():
     Entrega uma conexão do pool; se o pool não conseguir entregar nenhuma,
     abre uma conexão direta em vez de derrubar o request.
 
-    Motivo: em produção o pool entrou em estado de falha permanente e passou a
-    estourar PoolTimeout em toda requisição, mesmo com o banco saudável — uma
-    conexão crua abria em 0,15s no mesmo processo. Enquanto a causa não está
-    fechada, o fallback impede que isso vire indisponibilidade total. O pooler
-    do Supabase já é um pgbouncer, então abrir conexão avulsa é barato.
+    A causa conhecida (pool criado antes do fork do gunicorn) está tratada em
+    _get_pool(); o fallback fica como rede de segurança para o pooler do
+    Supabase recusar conexão em pico. O pooler já é um pgbouncer, então abrir
+    conexão avulsa é barato.
     """
     try:
-        cm = _pool.connection()
+        cm = _get_pool().connection()
         conn = cm.__enter__()
     except Exception as e:
         print(f"[DB] pool indisponivel ({type(e).__name__}: {e}) -> conexao direta",
