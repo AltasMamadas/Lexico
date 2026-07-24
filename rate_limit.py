@@ -12,7 +12,9 @@ _buckets = {}  # chave -> [timestamps]
 # Limites por categoria
 LIMITS = {
     "login":       (5,  60),    # 5 tentativas por minuto
-    "criar_conta": (3,  300),   # 3 contas por 5 min (por IP)
+    # 6 por 10 min: amigos jogando na mesma casa saem pelo mesmo IP (NAT), e o
+    # limite anterior (3 por 5 min) barrava um grupo criando contas junto.
+    "criar_conta": (6,  600),
     "geral":       (60, 60),    # 60 req/min genérico
 }
 

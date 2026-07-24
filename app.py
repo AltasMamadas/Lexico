@@ -14,6 +14,7 @@ load_dotenv()  # carrega .env local antes de importar módulos que leem env vars
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("psycopg.pool").setLevel(logging.WARNING)
 from flask import Flask, request, jsonify, send_from_directory
+from werkzeug.middleware.proxy_fix import ProxyFix
 import game_core as gc
 import auth, db
 import achievements as ach
@@ -25,6 +26,13 @@ import logger as log
 AVATARES_VALIDOS = {f"a{i}" for i in range(1, 13)}
 
 app = Flask(__name__, static_folder="static")
+
+# Atrás do proxy do Render, request.remote_addr é sempre 127.0.0.1 — sem isto
+# o rate limiter trata TODOS os jogadores como um único IP e o balde de
+# "criar_conta" (3 por 5 min) fica compartilhado pelo mundo inteiro, bloqueando
+# a criação de contas para todos. ProxyFix lê o X-Forwarded-For do Render.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
 LOCK = threading.Lock()
 
 
