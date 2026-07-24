@@ -471,6 +471,15 @@ def perfil_login():
         log.info("login_falhou", ip=ip, user=username)
         log.count("login_falhas")
         return jsonify({"ok": False, "motivo": "usuario ou pin incorretos"}), 401
+    # Contas criadas com o custo antigo do bcrypt pagariam ~9,5s em todo login;
+    # já que o PIN em claro só existe aqui, regrava o hash com o custo atual.
+    if auth.precisa_rehash(perfil["pin_hash"]):
+        try:
+            db.reset_pin(username, auth.hash_pin(p))
+            log.info("pin_rehash", user=username)
+        except Exception as e:
+            log.error("pin_rehash_falhou", user=username, erro=str(e))
+
     token = auth.gerar_token(perfil["id"], username)
     log.info("login_ok", user=username)
     log.count("logins")
