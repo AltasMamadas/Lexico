@@ -20,6 +20,24 @@ AVATARES_VALIDOS = {f"a{i}" for i in range(1, 13)}
 app = Flask(__name__, static_folder="static")
 LOCK = threading.Lock()
 
+
+@app.errorhandler(Exception)
+def _erro_json(e):
+    """
+    Rotas /api/ devem sempre responder JSON. O handler padrão do Flask devolve
+    HTML, que estoura no res.json() do cliente e deixa a tela presa em
+    "Carregando..." — o erro fica invisível em vez de aparecer.
+    """
+    from werkzeug.exceptions import HTTPException
+    if isinstance(e, HTTPException):
+        if request.path.startswith("/api/"):
+            return jsonify({"ok": False, "erro": e.description}), e.code
+        return e
+    log.error("erro_nao_tratado", rota=request.path, tipo=type(e).__name__, msg=str(e)[:200])
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "erro": "erro interno no servidor"}), 500
+    raise e
+
 # -------- pool de salas --------
 # sala_id -> {"id", "nome", "senha_hash", "estado", "criada_em", "vazia_desde"}
 salas = {}
@@ -559,7 +577,7 @@ def listar_amigos():
     amigos = db.listar_amigos(pid)
     # marcar quem está online (em alguma sala)
     online_set = set()
-    with lock:
+    with LOCK:
         for sid, estado in salas.items():
             for jn in estado.get("jogadores", {}):
                 online_set.add(jn)

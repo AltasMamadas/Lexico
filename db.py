@@ -17,11 +17,20 @@ if not _DB_URL:
 
 # Pool único reutilizado por todo o processo — evita o custo de TCP+TLS+auth
 # a cada query (caro no free tier do Supabase). Conexões abrem sob demanda.
+#
+# timeout=8: o padrão (30s) faz o request pendurar meio minuto quando o banco
+# está inalcançável, e o cliente fica preso em "Carregando...". Falhar rápido
+# deixa o erro visível em vez de travar a tela.
+# check: o pooler do Supabase derruba conexões ociosas; sem validar antes de
+# entregar, o pool devolve conexão morta depois de um período de inatividade.
 _pool = ConnectionPool(
     _DB_URL,
     min_size=1,
     max_size=8,
-    kwargs={"row_factory": dict_row},
+    timeout=8,
+    max_idle=120,
+    check=ConnectionPool.check_connection,
+    kwargs={"row_factory": dict_row, "connect_timeout": 8},
     open=True,
 )
 

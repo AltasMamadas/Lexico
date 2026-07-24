@@ -1200,9 +1200,12 @@ function processarNotificacoes(st){
 // ---- card de perfil (home) ----
 let achResumo=null;
 async function carregarResumoAchievements(forcar){
-  if(achResumo&&!forcar) return achResumo;
+  // o estado de erro não é cacheado: a próxima visita à home tenta de novo
+  if(achResumo&&!achResumo.erro&&!forcar) return achResumo;
   const r=await api("/api/perfil/achievements");
-  if(r&&r.ok) achResumo={ganhos:Object.keys(r.desbloqueados||{}).length,total:r.catalogo.length};
+  achResumo=(r&&r.ok)
+    ?{ganhos:Object.keys(r.desbloqueados||{}).length,total:r.catalogo.length}
+    :{erro:true};
   return achResumo;
 }
 let perfilStreak=null;
@@ -1215,9 +1218,11 @@ function renderPerfilCard(){
   const av=$("perfil-card-av"); if(av) av.innerHTML=avatarSVG(PERFIL_AVATAR,50);
   const nm=$("perfil-card-nome"); if(nm) nm.textContent=PERFIL_USER||"";
   const ac=$("perfil-card-ach");
-  if(ac) ac.textContent=achResumo
-    ?`🏅 ${achResumo.ganhos} de ${achResumo.total} conquistas`
-    :"🏅 carregando...";
+  if(ac) ac.textContent=!achResumo
+    ?"🏅 carregando..."
+    :(achResumo.erro
+      ?"🏅 conquistas indisponíveis"
+      :`🏅 ${achResumo.ganhos} de ${achResumo.total} conquistas`);
   const sk=$("perfil-card-streak");
   if(sk) sk.textContent=perfilStreak
     ?`🔥 ${perfilStreak.current} dia${perfilStreak.current!==1?"s":""} seguido${perfilStreak.current!==1?"s":""}`
