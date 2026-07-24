@@ -15,6 +15,9 @@ _DB_URL = os.environ.get("SUPABASE_DB_URL")
 if not _DB_URL:
     raise RuntimeError("defina a env var SUPABASE_DB_URL")
 
+if "sslmode" not in _DB_URL:
+    _DB_URL += ("&" if "?" in _DB_URL else "?") + "sslmode=require"
+
 # Pool único reutilizado por todo o processo — evita o custo de TCP+TLS+auth
 # a cada query (caro no free tier do Supabase). Conexões abrem sob demanda.
 #
@@ -37,8 +40,13 @@ _pool = ConnectionPool(
 
 @contextmanager
 def _conn():
-    with _pool.connection() as conn:
-        yield conn
+    try:
+        with _pool.connection() as conn:
+            yield conn
+    except Exception as e:
+        import sys
+        print(f"[DB ERROR] {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+        raise
 
 
 def criar_perfil(username, pin_hash):
